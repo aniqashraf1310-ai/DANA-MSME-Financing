@@ -152,10 +152,50 @@ const INITIAL_OFFERS = [
   }
 ];
 
+
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api';
+
+const formatApplicationStatus = (status = '') => {
+  const labels = {
+    DRAFT: 'Draft',
+    SUBMITTED: 'Submitted',
+    UNDER_VERIFICATION: 'Under Verification',
+    BIDDING_OPEN: 'Bidding Open',
+    OFFERS_RECEIVED: 'Offers Received',
+    OFFER_ACCEPTED: 'Offer Accepted',
+    AWAITING_DISBURSEMENT_PROOF: 'Awaiting Disbursement Proof',
+    REPAYING: 'Repaying',
+    COMPLETED: 'Completed',
+    REJECTED: 'Rejected'
+  };
+
+  return labels[status] || status;
+};
+
+const mapApplicationFromApi = (row) => ({
+  id: row.application_code || row.applicationCode || String(row.id),
+  databaseId: row.id,
+  applicantName: row.applicant_name || row.applicantName || 'Unknown Applicant',
+  companyName: row.company_name || row.companyName || 'Unknown Company',
+  industry: row.industry || 'Not specified',
+  revenue: Number(row.monthly_revenue ?? row.revenue ?? 0),
+  ageYears: Number(row.business_age_years ?? row.ageYears ?? 0),
+  requestedAmount: Number(row.requested_amount ?? row.requestedAmount ?? 0),
+  purpose: row.purpose || '',
+  status: formatApplicationStatus(row.status),
+  documents: Array.isArray(row.documents) ? row.documents : [],
+  timestamp: row.created_at
+    ? new Date(row.created_at).toLocaleString()
+    : row.timestamp || new Date().toLocaleString(),
+  activeLoan: row.activeLoan
+});
+
 export default function App() {
 
   // App global data
-  const [applications, setApplications] = useState(INITIAL_APPLICATIONS);
+  const [applications, setApplications] = useState([]);
+  const [applicationsLoading, setApplicationsLoading] = useState(true);
+  const [applicationsError, setApplicationsError] = useState('');
   const [loanProducts, setLoanProducts] = useState(INITIAL_LOAN_PRODUCTS);
   const [offers, setOffers] = useState(INITIAL_OFFERS);
   const [systemLogs, setSystemLogs] = useState([
@@ -206,6 +246,35 @@ export default function App() {
 
   // Platform dynamic revenue accumulator from payment fees
   const [accumulatedPlatformFees, setAccumulatedPlatformFees] = useState(117.60); // Starting simulated fee earnings
+
+  const loadApplications = async () => {
+    setApplicationsLoading(true);
+    setApplicationsError('');
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/applications`);
+
+      if (!response.ok) {
+        const errorBody = await response.json().catch(() => ({}));
+        throw new Error(errorBody.message || 'Unable to load applications from the server.');
+      }
+
+      const rows = await response.json();
+      setApplications(Array.isArray(rows) ? rows.map(mapApplicationFromApi) : []);
+    } catch (error) {
+      console.error('Failed to load applications:', error);
+      setApplicationsError(error.message || 'Unable to connect to the application API.');
+
+      // Keep the interface usable when the backend is temporarily unavailable.
+      setApplications(INITIAL_APPLICATIONS);
+    } finally {
+      setApplicationsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadApplications();
+  }, []);
 
   // Auto-switch profile details depending on role switched inside Dev Switcher
   const handleRoleSwitch = (role) => {
@@ -304,39 +373,74 @@ export default function App() {
     };
   };
 
-  const handleApplySubmit = (e) => {
+  const handleApplySubmit = async (e) => {
     e.preventDefault();
-    
-    // Create new application logic
-    const appCode = `APP-${Math.floor(100 + Math.random() * 900)}`;
-    const newAppObj = {
-      id: appCode,
-      applicantName: currentUser.username,
-      companyName: currentUser.company,
-      industry: currentUser.industry,
-      revenue: currentUser.revenue,
-      ageYears: currentUser.ageYears,
-      requestedAmount: Number(newApplicationForm.requestedAmount),
-      purpose: newApplicationForm.purpose,
-      status: 'Bidding Open',
-      documents: [
-        { name: 'SSM_Registration.pdf', size: '1.2 MB', status: 'Verified' },
-        { name: 'BankStatement_6Months.pdf', size: '4.8 MB', status: 'Verified' }
-      ],
-      timestamp: new Date().toLocaleString()
-    };
+    setApplicationsError('');
 
-    setApplications(prev => [newAppObj, ...prev]);
-    addLog(`Submitted dynamic financing application request for RM ${newApplicationForm.requestedAmount} (${appCode}) via DANA`);
-    sendEmailNotification(
-      currentUser.email,
-      'Financing Request Dispatched on DANA',
-      `Dear ${currentUser.username}, your application ${appCode} for RM ${newApplicationForm.requestedAmount} has been registered successfully on DANA. Banks have been invited to bid custom financing solutions.`
-    );
+    try {
+      const response = await fetch(`${API_BASE_URL}/applications`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          // Temporary development IDs. Replace these with authenticated user/company IDs later.
+          applicantUserId: 1,
+          companyId: 1,
+          requestedAmount: Number(newApplicationForm.requestedAmount),
+          purpose: newApplicationForm.purpose.trim()
+        })
+      });
 
-    // Reset application form state
-    setNewApplicationForm({ requestedAmount: 50000, purpose: '', ssmVerified: false, bankStmtUploaded: false });
-    setActiveTab('applications');
+      const responseBody = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(responseBody.message || 'Application submission failed.');
+      }
+
+      const newAppObj = {
+        id: responseBody.applicationCode,
+        databaseId: responseBody.id,
+        applicantName: currentUser.username,
+        companyName: currentUser.company,
+        industry: currentUser.industry,
+        revenue: currentUser.revenue,
+        ageYears: currentUser.ageYears,
+        requestedAmount: Number(newApplicationForm.requestedAmount),
+        purpose: newApplicationForm.purpose.trim(),
+        status: formatApplicationStatus(responseBody.status),
+        documents: [
+          ...(newApplicationForm.ssmVerified
+            ? [{ name: 'SSM_CompanyProfile.pdf', size: 'Pending upload', status: 'Pending' }]
+            : []),
+          ...(newApplicationForm.bankStmtUploaded
+            ? [{ name: 'BankStatement_6Months.pdf', size: 'Pending upload', status: 'Pending' }]
+            : [])
+        ],
+        timestamp: new Date().toLocaleString()
+      };
+
+      setApplications(prev => [newAppObj, ...prev]);
+      addLog(
+        `Submitted financing application request for RM ${newApplicationForm.requestedAmount} (${responseBody.applicationCode}) via DANA`
+      );
+      sendEmailNotification(
+        currentUser.email,
+        'Financing Request Submitted on DANA',
+        `Dear ${currentUser.username}, your application ${responseBody.applicationCode} for RM ${newApplicationForm.requestedAmount} has been submitted successfully and is awaiting verification.`
+      );
+
+      setNewApplicationForm({
+        requestedAmount: 50000,
+        purpose: '',
+        ssmVerified: false,
+        bankStmtUploaded: false
+      });
+      setActiveTab('applications');
+    } catch (error) {
+      console.error('Failed to submit application:', error);
+      setApplicationsError(error.message || 'Unable to submit the financing application.');
+    }
   };
 
   const handlePublishProduct = (e) => {
@@ -493,9 +597,10 @@ export default function App() {
 
   const filteredApplications = useMemo(() => {
     return applications.filter(app => {
-      const matchesSearch = app.companyName.toLowerCase().includes(searchQuery.toLowerCase()) || 
-                            app.applicantName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                            app.id.toLowerCase().includes(searchQuery.toLowerCase());
+      const normalizedSearch = searchQuery.toLowerCase();
+      const matchesSearch = String(app.companyName || '').toLowerCase().includes(normalizedSearch) ||
+                            String(app.applicantName || '').toLowerCase().includes(normalizedSearch) ||
+                            String(app.id || '').toLowerCase().includes(normalizedSearch);
       const matchesStatus = statusFilter === 'All' || app.status === statusFilter;
       return matchesSearch && matchesStatus;
     });
@@ -687,6 +792,24 @@ export default function App() {
 
       {/* CORE WRAPPER CONTENT AREA */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {applicationsLoading && (
+          <div className="mb-6 rounded-xl border border-slate-800 bg-slate-950 px-4 py-3 text-sm text-slate-300">
+            Loading applications from the DANA API...
+          </div>
+        )}
+
+        {applicationsError && (
+          <div className="mb-6 flex items-start justify-between gap-4 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+            <span>{applicationsError}</span>
+            <button
+              type="button"
+              onClick={loadApplications}
+              className="shrink-0 rounded-lg border border-red-400/30 px-3 py-1 text-xs font-bold hover:bg-red-500/10"
+            >
+              Retry
+            </button>
+          </div>
+        )}
         
         {/* ======================================= */}
         {/* APPLICANT INTERFACE VIEW                */}
@@ -1153,7 +1276,7 @@ export default function App() {
                         <p className="text-xs text-slate-400 mt-1">Submitted on: <strong className="font-mono text-slate-300">{app.timestamp}</strong></p>
                         
                         <div className="flex gap-4 mt-3">
-                          {app.documents.map((doc, idx) => (
+                          {(app.documents || []).map((doc, idx) => (
                             <span key={idx} className="inline-flex items-center gap-1 text-[10px] text-slate-400 bg-slate-900 px-2 py-1 rounded border border-slate-800">
                               <FileText className="w-3 h-3 text-amber-500" />
                               {doc.name} ({doc.size})
@@ -1270,7 +1393,7 @@ export default function App() {
                         <div>
                           <span className="text-[10px] text-slate-500 block uppercase font-bold tracking-wider mb-1.5">Submitted KYC Documents</span>
                           <div className="flex flex-wrap gap-3">
-                            {app.documents.map((doc, idx) => (
+                            {(app.documents || []).map((doc, idx) => (
                               <div key={idx} className="flex items-center gap-1.5 bg-slate-900 border border-slate-800 px-2.5 py-1 rounded-lg text-xs">
                                 <FileText className="w-3.5 h-3.5 text-amber-500" />
                                 <span className="text-slate-300 font-medium">{doc.name}</span>
