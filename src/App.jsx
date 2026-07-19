@@ -211,10 +211,14 @@ const loadSavedData = (key, fallbackValue) => {
   }
 };
 
+const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL ||
+  'http://localhost:5000/api';
+
 export default function App() {
-const [applications, setApplications] = useState(() =>
-  loadSavedData('dana_applications', INITIAL_APPLICATIONS)
-);
+const [applications, setApplications] = useState([]);
+const [applicationsLoading, setApplicationsLoading] = useState(true);
+const [applicationsError, setApplicationsError] = useState('');
 
 const [loanProducts, setLoanProducts] = useState(() =>
   loadSavedData('dana_loan_products', INITIAL_LOAN_PRODUCTS)
@@ -302,12 +306,63 @@ const [offers, setOffers] = useState(() =>
   loadSavedData('dana_platform_fees', 117.6)
 );
 
+const mapApplicationFromApi = row => ({
+  id: row.application_code,
+  databaseId: row.id,
+
+  applicantUserId: Number(row.applicant_user_id),
+  companyId: Number(row.company_id),
+
+  applicantName: row.applicant_name || 'Unknown Applicant',
+  companyName: row.company_name || 'Unknown Company',
+  industry: row.industry || 'Not specified',
+  revenue: Number(row.monthly_revenue || 0),
+  ageYears: Number(row.business_age_years || 0),
+  requestedAmount: Number(row.requested_amount || 0),
+  purpose: row.purpose || '',
+
+  status: String(row.status || '')
+    .toLowerCase()
+    .split('_')
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' '),
+
+  documents: [],
+
+  timestamp: row.created_at
+    ? new Date(row.created_at).toLocaleString()
+    : ''
+});
+
+const loadApplications = async () => {
+  setApplicationsLoading(true);
+  setApplicationsError('');
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/applications`);
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.message || 'Unable to load applications.');
+    }
+
+    setApplications(
+      Array.isArray(data)
+        ? data.map(mapApplicationFromApi)
+        : []
+    );
+  } catch (error) {
+    console.error('Failed to load applications:', error);
+    setApplicationsError(error.message);
+  } finally {
+    setApplicationsLoading(false);
+  }
+};
+
 useEffect(() => {
-  localStorage.setItem(
-    'dana_applications',
-    JSON.stringify(applications)
-  );
-}, [applications]);
+  loadApplications();
+}, []);
+
 
 useEffect(() => {
   localStorage.setItem(
@@ -394,7 +449,18 @@ useEffect(() => {
       }
 
       setCurrentRole(account.role);
-      setCurrentUser(account.profile);
+      setCurrentUser({
+  ...account.profile,
+  userId:
+    account.databaseId ||
+    account.profile?.userId ||
+    (account.username === 'danish' ? 1 : null),
+
+  companyId:
+    account.companyId ||
+    account.profile?.companyId ||
+    (account.username === 'danish' ? 1 : null)
+});
       setIsAuthenticated(true);
       
       if (account.role === 'Applicant') {
@@ -412,50 +478,88 @@ useEffect(() => {
     }
   };
 
-  const handleRegister = (e) => {
-    e.preventDefault();
-    setAuthError('');
-    setAuthSuccessMsg('');
+  const handleRegister = async event => {
+  event.preventDefault();
+  setAuthError('');
+  setAuthSuccessMsg('');
 
-    if (registerForm.username.length < 3) {
-      setAuthError('Username must be at least 3 characters.');
-      return;
-    }
-    if (registerForm.password !== registerForm.confirmPassword) {
-      setAuthError('Passwords do not match.');
-      return;
-    }
-    if (userAccounts.some(u => u.username.toLowerCase() === registerForm.username.toLowerCase())) {
-      setAuthError('This username is already taken.');
-      return;
-    }
+  if (registerForm.username.trim().length < 3) {
+    setAuthError('Username must be at least 3 characters.');
+    return;
+  }
 
-    const newAccount = {
-      username: registerForm.username.toLowerCase(),
-      password: registerForm.password,
-      role: 'Applicant',
-      approved: false, // FLAG: Must be approved by the Administrator first
-      profile: {
-        username: registerForm.fullName,
-        company: registerForm.companyName,
+  if (registerForm.password.length < 6) {
+    setAuthError('Password must be at least 6 characters.');
+    return;
+  }
+
+  if (registerForm.password !== registerForm.confirmPassword) {
+    setAuthError('Passwords do not match.');
+    return;
+  }
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/auth/register`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        username: registerForm.username,
+        password: registerForm.password,
+        fullName: registerForm.fullName,
+        companyName: registerForm.companyName,
         email: registerForm.email,
+        phone: registerForm.phone,
         industry: registerForm.industry,
-        revenue: Number(registerForm.revenue) || 10000,
-        ageYears: Number(registerForm.ageYears) || 1,
-        phone: registerForm.phone || '+6012-XXXXXXX'
-      }
-    };
+        revenue: Number(registerForm.revenue),
+        ageYears: Number(registerForm.ageYears)
+      })
+    });
 
-    setUserAccounts(prev => [...prev, newAccount]);
-    setAuthSuccessMsg('Registration submitted successfully! Your account is pending Administrator authorization. Once approved, you will be able to log in.');
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.message || 'Registration failed.');
+    }
+
+    // Keep the pending account visible in the current admin UI.
+    const pendingAccount = {
+  databaseId: data.user.id,
+  companyId: data.user.companyId,
+  username: data.user.username,
+  password: registerForm.password,
+  role: 'Applicant',
+  approved: false,
+
+  profile: {
+    userId: data.user.id,
+    companyId: data.user.companyId,
+    username: registerForm.fullName.trim(),
+    company: registerForm.companyName.trim(),
+    email: registerForm.email.trim().toLowerCase(),
+    industry: registerForm.industry,
+    revenue: Number(registerForm.revenue),
+    ageYears: Number(registerForm.ageYears),
+    phone: registerForm.phone
+  }
+};
+
+    setUserAccounts(previous => [...previous, pendingAccount]);
+
+    setAuthSuccessMsg(data.message);
     setAuthMode('login');
-    
-    addLog(`Submitted new Applicant profile registration: ${registerForm.fullName} (${registerForm.companyName}). Pending approval.`, 'Applicant', registerForm.username);
-    
+
+    addLog(
+      `Submitted new Applicant registration: ${registerForm.fullName} (${registerForm.companyName}). Pending approval.`,
+      'Applicant',
+      registerForm.username
+    );
+
     sendEmailNotification(
       registerForm.email,
       'DANA Sign-up Under Review',
-      `Dear ${registerForm.fullName}, welcome to DANA! Your profile for ${registerForm.companyName} has been recorded and is currently under review by the Administrator.`
+      `Dear ${registerForm.fullName}, your registration for ${registerForm.companyName} is awaiting administrator approval.`
     );
 
     setRegisterForm({
@@ -470,7 +574,11 @@ useEffect(() => {
       revenue: '',
       ageYears: ''
     });
-  };
+  } catch (error) {
+    console.error('Registration failed:', error);
+    setAuthError(error.message);
+  }
+};
 
   const handleApproveAccount = (username) => {
     setUserAccounts(prev => prev.map(u => {
@@ -556,7 +664,18 @@ useEffect(() => {
         return;
       }
       setCurrentRole(account.role);
-      setCurrentUser(account.profile);
+      setCurrentUser({
+  ...account.profile,
+  userId:
+    account.databaseId ||
+    account.profile?.userId ||
+    (account.username === 'danish' ? 1 : null),
+
+  companyId:
+    account.companyId ||
+    account.profile?.companyId ||
+    (account.username === 'danish' ? 1 : null)
+});
       setIsAuthenticated(true);
       if (account.role === 'Applicant') setActiveTab('dashboard');
       else if (account.role === 'Loan Officer') setActiveTab('review');
@@ -603,38 +722,61 @@ useEffect(() => {
     };
   };
 
-  const handleApplySubmit = (e) => {
-    e.preventDefault();
-    
-    const appCode = `APP-${Math.floor(100 + Math.random() * 900)}`;
-    const newAppObj = {
-      id: appCode,
-      applicantName: currentUser.username,
-      companyName: currentUser.company,
-      industry: currentUser.industry,
-      revenue: currentUser.revenue,
-      ageYears: currentUser.ageYears,
-      requestedAmount: Number(newApplicationForm.requestedAmount),
-      purpose: newApplicationForm.purpose,
-      status: 'Bidding Open',
-      documents: [
-        { name: 'SSM_Registration.pdf', size: '1.2 MB', status: 'Verified' },
-        { name: 'BankStatement_6Months.pdf', size: '4.8 MB', status: 'Verified' }
-      ],
-      timestamp: new Date().toLocaleString()
-    };
+  const handleApplySubmit = async event => {
+  event.preventDefault();
+  setApplicationsError('');
 
-    setApplications(prev => [newAppObj, ...prev]);
-    addLog(`Submitted dynamic financing application request for RM ${newApplicationForm.requestedAmount} (${appCode}) via DANA`);
-    sendEmailNotification(
-      currentUser.email,
-      'Financing Request Dispatched on DANA',
-      `Dear ${currentUser.username}, your application ${appCode} for RM ${newApplicationForm.requestedAmount} has been registered successfully.`
+  if (!currentUser?.userId || !currentUser?.companyId) {
+    setApplicationsError(
+      'Your account is not linked to a MySQL user and company record. Please log out and log in again.'
     );
+    return;
+  }
 
-    setNewApplicationForm({ requestedAmount: 50000, purpose: '', ssmVerified: false, bankStmtUploaded: false });
+  try {
+    const response = await fetch(`${API_BASE_URL}/applications`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+
+      body: JSON.stringify({
+        applicantUserId: currentUser.userId,
+        companyId: currentUser.companyId,
+        requestedAmount: Number(
+          newApplicationForm.requestedAmount
+        ),
+        purpose: newApplicationForm.purpose.trim()
+      })
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(
+        data.message || 'Application submission failed.'
+      );
+    }
+
+    await loadApplications();
+
+    setNewApplicationForm({
+      requestedAmount: 50000,
+      purpose: '',
+      ssmVerified: false,
+      bankStmtUploaded: false
+    });
+
     setActiveTab('applications');
-  };
+
+    addLog(
+      `Submitted financing application ${data.applicationCode}`
+    );
+  } catch (error) {
+    console.error('Failed to submit application:', error);
+    setApplicationsError(error.message);
+  }
+};
 
   const handlePublishProduct = (e) => {
     e.preventDefault();
@@ -1419,7 +1561,7 @@ useEffect(() => {
                           <span className="text-xs text-slate-400 font-medium">Automatic system tracking active</span>
                         </div>
 
-                        {applications.filter(a => a.status === 'Repaying' && a.applicantName === currentUser.username).length === 0 ? (
+                        {applications.filter(a => a.status === 'Repaying' && a.applicantUserId === Number(currentUser.userId)).length === 0 ? (
                           <div className="flex flex-col items-center justify-center py-12 text-center">
                             <AlertCircle className="w-12 h-12 text-slate-600 mb-3" />
                             <p className="font-bold text-slate-400">No active loans requiring repayments.</p>
@@ -1494,7 +1636,7 @@ useEffect(() => {
                         <span className="text-xs text-slate-400 font-medium">Bidding mechanism enables competitive pricing</span>
                       </div>
 
-                      {applications.filter(a => (a.status === 'Bidding Open' || a.status === 'Offers Received') && a.applicantName === currentUser.username).length === 0 ? (
+                      {applications.filter(a => (a.status === 'Bidding Open' || a.status === 'Offers Received') && a.applicantUserId === Number(currentUser.userId)).length === 0 ? (
                         <div className="flex flex-col items-center justify-center py-12 text-center bg-slate-900/40 rounded-xl border border-dashed border-slate-800">
                           <AlertCircle className="w-12 h-12 text-slate-700 mb-2" />
                           <p className="font-bold text-slate-400">No active applications currently in Bidding Phase.</p>
@@ -1504,7 +1646,7 @@ useEffect(() => {
                         </div>
                       ) : (
                         <div className="space-y-6">
-                          {applications.filter(a => (a.status === 'Bidding Open' || a.status === 'Offers Received') && a.applicantName === currentUser.username).map(app => {
+                          {applications.filter(a => (a.status === 'Bidding Open' || a.status === 'Offers Received') && a.applicantUserId === Number(currentUser.userId)).map(app => {
                             const appOffers = offers.filter(o => o.applicationId === app.id);
                             return (
                               <div key={app.id} className="bg-slate-900 rounded-xl p-5 border border-slate-800">
@@ -1676,7 +1818,11 @@ useEffect(() => {
                         <p className="text-xs text-slate-400">Digital workflow coordinates submissions directly to top institutions via DANA.</p>
                       </div>
                     </div>
-
+                    {applicationsError && (
+  <div className="mb-4 rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-xs text-red-400">
+    {applicationsError}
+  </div>
+)}
                     <form onSubmit={handleApplySubmit} className="space-y-6">
                       
                       <div>
@@ -1768,7 +1914,8 @@ useEffect(() => {
                     </div>
 
                     <div className="space-y-4">
-                      {applications.filter(app => app.applicantName === currentUser.username).length === 0 ? (
+                      {applications.filter(app =>
+                      app.applicantUserId === Number(currentUser.userId)).length === 0 ? (
                         <div className="text-center py-12 bg-slate-950 rounded-2xl border border-slate-850">
                           <AlertCircle className="w-12 h-12 text-slate-600 mx-auto mb-3" />
                           <p className="font-bold text-slate-400">No requests submitted yet.</p>
@@ -1780,7 +1927,8 @@ useEffect(() => {
                           </button>
                         </div>
                       ) : (
-                        applications.filter(app => app.applicantName === currentUser.username).map(app => (
+                        applications.filter(app =>
+                        app.applicantUserId === Number(currentUser.userId)).map(app => (
                           <div key={app.id} className="bg-slate-950 rounded-2xl border border-slate-850 p-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                             <div>
                               <div className="flex items-center gap-2.5">

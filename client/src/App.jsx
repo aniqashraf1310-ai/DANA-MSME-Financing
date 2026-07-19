@@ -190,53 +190,22 @@ const mapApplicationFromApi = (row) => ({
   activeLoan: row.activeLoan
 });
 
-const loadSavedData = (key, fallbackValue) => {
-  try {
-    const savedValue = localStorage.getItem(key);
-
-    return savedValue !== null
-      ? JSON.parse(savedValue)
-      : fallbackValue;
-  } catch (error) {
-    console.error(`Unable to load ${key}:`, error);
-    return fallbackValue;
-  }
-};
-
 export default function App() {
 
   // App global data
-const [applications, setApplications] = useState(() =>
-  loadSavedData('dana_applications', INITIAL_APPLICATIONS)
-);
-
-const [loanProducts, setLoanProducts] = useState(() =>
-  loadSavedData('dana_loan_products', INITIAL_LOAN_PRODUCTS)
-);
-
-const [offers, setOffers] = useState(() =>
-  loadSavedData('dana_offers', INITIAL_OFFERS)
-);
-const [userAccounts, setUserAccounts] = useState(() =>
-  loadSavedData('dana_user_accounts', INITIAL_USER_ACCOUNTS)
-);
+  const [applications, setApplications] = useState([]);
   const [applicationsLoading, setApplicationsLoading] = useState(true);
   const [applicationsError, setApplicationsError] = useState('');
-  const [systemLogs, setSystemLogs] = useState(() =>
-  loadSavedData('dana_system_logs', [
-    {
-      id: 1,
-      userId: 'SYS',
-      role: 'System',
-      action: 'DANA Platform initialized securely',
-      timestamp: '2026-07-15 08:00 AM',
-      ip: '127.0.0.1'
-    }
-  ])
-);
-const [sentEmails, setSentEmails] = useState(() =>
-  loadSavedData('dana_sent_emails', [])
-);
+  const [loanProducts, setLoanProducts] = useState(INITIAL_LOAN_PRODUCTS);
+  const [offers, setOffers] = useState(INITIAL_OFFERS);
+  const [systemLogs, setSystemLogs] = useState([
+    { id: 1, userId: 'SYS', role: 'System', action: 'DANA Platform initialized securely', timestamp: '2026-07-15 08:00 AM', ip: '127.0.0.1' },
+    { id: 2, userId: 'Admin', role: 'Administrator', action: 'Fetched active financial products on DANA', timestamp: '2026-07-15 08:30 AM', ip: '192.168.1.1' },
+    { id: 3, userId: 'Danish', role: 'Applicant', action: 'Updated business eligibility profile on DANA', timestamp: '2026-07-15 09:12 AM', ip: '202.185.34.8' }
+  ]);
+  const [sentEmails, setSentEmails] = useState([
+    { id: 1, recipient: 'danish@aerotech.my', subject: 'Application Status Updated on DANA: Bidding Open', body: 'Dear Danish, your application APP-809 is approved for bidding on DANA. Banks are now reviewing.', timestamp: '2026-07-10 10:35 AM' }
+  ]);
 
   // Auth & Roles
   const [currentRole, setCurrentRole] = useState('Applicant'); // 'Applicant', 'Loan Officer', 'Administrator'
@@ -249,27 +218,6 @@ const [sentEmails, setSentEmails] = useState(() =>
     ageYears: 4,
     phone: '+6012-3456789'
   });
-
-  //reset admin button
-  const resetDemoData = () => {
-  const confirmed = window.confirm(
-    'Reset all DANA demonstration data?'
-  );
-
-  if (!confirmed) return;
-
-  [
-    'dana_applications',
-    'dana_loan_products',
-    'dana_offers',
-    'dana_user_accounts',
-    'dana_system_logs',
-    'dana_sent_emails',
-    'dana_platform_fees'
-  ].forEach(key => localStorage.removeItem(key));
-
-  window.location.reload();
-};
 
   // UI Navigation states
   const [activeTab, setActiveTab] = useState('dashboard');
@@ -325,53 +273,8 @@ const [sentEmails, setSentEmails] = useState(() =>
   };
 
   useEffect(() => {
-  localStorage.setItem(
-    'dana_applications',
-    JSON.stringify(applications)
-  );
-}, [applications]);
-
-useEffect(() => {
-  localStorage.setItem(
-    'dana_loan_products',
-    JSON.stringify(loanProducts)
-  );
-}, [loanProducts]);
-
-useEffect(() => {
-  localStorage.setItem(
-    'dana_offers',
-    JSON.stringify(offers)
-  );
-}, [offers]);
-
-useEffect(() => {
-  localStorage.setItem(
-    'dana_user_accounts',
-    JSON.stringify(userAccounts)
-  );
-}, [userAccounts]);
-
-useEffect(() => {
-  localStorage.setItem(
-    'dana_system_logs',
-    JSON.stringify(systemLogs)
-  );
-}, [systemLogs]);
-
-useEffect(() => {
-  localStorage.setItem(
-    'dana_sent_emails',
-    JSON.stringify(sentEmails)
-  );
-}, [sentEmails]);
-
-useEffect(() => {
-  localStorage.setItem(
-    'dana_platform_fees',
-    JSON.stringify(accumulatedPlatformFees)
-  );
-}, [accumulatedPlatformFees]);
+    loadApplications();
+  }, []);
 
   // Auto-switch profile details depending on role switched inside Dev Switcher
   const handleRoleSwitch = (role) => {
@@ -1751,10 +1654,6 @@ useEffect(() => {
                       <span>Tiered Repayments processing fee (1%, 2%, 3%) calculated live on DANA</span>
                     </div>
                   </div>
-
-                  <button type="button" onClick={resetDemoData}>
-  Reset Demo Data
-</button>
 
                   <div className="bg-slate-950 p-6 rounded-2xl border border-slate-850 shadow-md">
                     <div className="flex justify-between items-start">
